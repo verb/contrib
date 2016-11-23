@@ -88,6 +88,7 @@ func main() {
 		os.Exit(2)
 	}
 
+	headers := http.Header{"Host": []string{*host}}
 	host := serviceIP
 	if *port != 80 {
 		host = fmt.Sprintf("%s:%d", host, port)
@@ -98,6 +99,7 @@ func main() {
 		targets = append(targets, vegeta.Target{
 			Method: "GET",
 			URL:    fmt.Sprintf("http://%s/%s", host, path),
+			Header: headers,
 		})
 	}
 	targeter := vegeta.NewStaticTargeter(targets...)
