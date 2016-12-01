@@ -91,7 +91,7 @@ func main() {
 	headers := http.Header{"Host": []string{*host}}
 	host := serviceIP
 	if *port != 80 {
-		host = fmt.Sprintf("%s:%d", host, port)
+		host = fmt.Sprintf("%s:%d", host, *port)
 	}
 	var targets []vegeta.Target
 	for _, path := range strings.Split(*paths, ",") {
