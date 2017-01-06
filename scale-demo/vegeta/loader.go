@@ -17,26 +17,31 @@ limitations under the License.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"path"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	vegeta "github.com/tsenart/vegeta/lib"
 )
 
 var (
-	host     = flag.String("host", "", "The host to load test")
-	port     = flag.Int("port", 80, "The port to load test")
-	paths    = flag.String("paths", "/", "A comma separated list of URL paths to load test")
-	rate     = flag.Int("rate", 0, "The QPS to send")
-	duration = flag.Duration("duration", 10*time.Second, "The duration of the load test")
-	addr     = flag.String("address", "localhost:8080", "The address to serve on")
-	workers  = flag.Int("workers", 10, "The number of workers to use")
+	host       = flag.String("host", "", "The host to load test")
+	port       = flag.Int("port", 80, "The port to load test")
+	paths      = flag.String("paths", "/", "A comma separated list of URL paths to load test")
+	rate       = flag.Int("rate", 0, "The QPS to send")
+	resultsDir = flag.String("results", "", "If set, a directory in which to save results")
+	duration   = flag.Duration("duration", 10*time.Second, "The duration of the load test")
+	addr       = flag.String("address", "localhost:8080", "The address to serve on")
+	workers    = flag.Int("workers", 10, "The number of workers to use")
 )
 
 // HTTPReporter outputs metrics over HTTP
@@ -65,6 +70,32 @@ func (h *HTTPReporter) SetMetrics(metrics *vegeta.Metrics) {
 	h.Lock()
 	defer h.Unlock()
 	h.metrics = metrics
+}
+
+type output struct {
+	encoder *json.Encoder
+	file    *os.File
+	name    string
+}
+
+func (o *output) close() {
+	if o.file != nil {
+		o.file.Close()
+		os.Rename(o.file.Name(), o.name)
+	}
+}
+
+func (o *output) rotate() error {
+	o.close()
+
+	o.name = path.Join(*resultsDir, fmt.Sprintf("results-%d.json", time.Now().Unix()))
+	file, err := os.Create(o.name + ".tmp")
+	if err != nil {
+		return err
+	}
+
+	o.file, o.encoder = file, json.NewEncoder(file)
+	return nil
 }
 
 func main() {
@@ -108,10 +139,27 @@ func main() {
 	reporter := &HTTPReporter{}
 	go http.ListenAndServe(*addr, reporter)
 
-	for {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	out := &output{}
+	defer out.close()
+	for len(stop) == 0 {
 		metrics := &vegeta.Metrics{}
+		if *resultsDir != "" {
+			if err := out.rotate(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error opening results file:", err)
+				os.Exit(3)
+			}
+		}
 		for res := range attacker.Attack(targeter, uint64(*rate), *duration) {
 			metrics.Add(res)
+			if out.encoder != nil {
+				out.encoder.Encode(res)
+			}
+			if len(stop) > 0 {
+				break
+			}
 		}
 		metrics.Close()
 		reporter.SetMetrics(metrics)
